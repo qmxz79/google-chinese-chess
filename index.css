@@ -191,8 +191,12 @@ button {
 }
 
 .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 12px;
   white-space: nowrap;
+  text-decoration: none;
 }
 
 .primary-button {

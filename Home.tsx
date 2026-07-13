@@ -485,6 +485,9 @@ export default function Home() {
           <p>{roomModeLabel(friendRoom, gameMode)}</p>
         </div>
         <div className="header-actions">
+          <a className="ghost-button" href="/">
+            返回主页
+          </a>
           <button
             className={`ghost-button bgm-toggle ${bgmOn ? "bgm-on" : ""}`}
             onClick={toggleBgm}
