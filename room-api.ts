@@ -31,7 +31,7 @@ interface ApiResponse<T> {
   tokenSide?: RoomSide | null;
 }
 
-const API_ROOT = "/api";
+const API_ROOT = `${import.meta.env.BASE_URL}api`;
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_ROOT}${path}`, {
