@@ -4,6 +4,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 const dataDir = "/home/qmxz/chinese-chess-data";
+const staticDir = path.join(__dirname, "dist");
 const resultFile = path.join(dataDir, "game-results.jsonl");
 const roomFile = path.join(dataDir, "rooms.json");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -17,6 +18,27 @@ function send(res, code, data) {
     "access-control-allow-headers": "content-type",
   });
   res.end(body);
+}
+
+function serveStatic(req, res, pathname) {
+  if (pathname === "/chess") {
+    res.writeHead(302, { location: "/chess/" });
+    res.end();
+    return true;
+  }
+  if (!pathname.startsWith("/chess/")) return false;
+
+  const relative = decodeURIComponent(pathname.slice("/chess/".length)) || "index.html";
+  const file = path.resolve(staticDir, relative);
+  const root = path.resolve(staticDir);
+  if (!file.startsWith(root)) return send(res, 403, { error: "forbidden" }), true;
+
+  const target = fs.existsSync(file) && fs.statSync(file).isFile() ? file : path.join(staticDir, "index.html");
+  const ext = path.extname(target);
+  const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
+  res.writeHead(200, { "content-type": `${types[ext] || "application/octet-stream"}; charset=utf-8` });
+  fs.createReadStream(target).pipe(res);
+  return true;
 }
 
 function readJsonFile(file, fallback) {
@@ -484,7 +506,10 @@ function handleMove(code, token, from, to) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
-  const pathname = url.pathname;
+  let pathname = url.pathname;
+
+  if (pathname.startsWith("/chess/api/")) pathname = pathname.slice("/chess/api".length);
+  else if (serveStatic(req, res, pathname)) return;
 
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (pathname === "/health") return send(res, 200, { ok: true });
