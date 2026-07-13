@@ -31,7 +31,12 @@ const DIFFICULTY_DEPTH: Record<Difficulty, number> = {
   hard: 9,
 };
 
-const MAX_SEARCH_MS = 5000;
+const SEARCH_TIME_MS: Record<Difficulty, number> = {
+  easy: 300,
+  medium: 800,
+  hard: 1500,
+};
+const QUIESCENCE_DEPTH = 3;
 const CHECK_BONUS = 650;
 const CHECKMATE_SCORE = 100000;
 
@@ -47,11 +52,14 @@ function pieceValue(type: PieceType | undefined): number {
   return type ? PIECE_VALUES[type] : 0;
 }
 
-function positionWeight(row: number, col: number, side: Side): number {
+function positionWeight(type: PieceType, row: number, col: number, side: Side): number {
   const center = 10 - (Math.abs(col - 4) + Math.abs(row - 4.5));
   const advanced = side === "red" ? 9 - row : row;
+  const crossedRiver = side === "red" ? row < 5 : row >= 5;
   const palacePressure = col >= 3 && col <= 5 ? 4 : 0;
-  return center * 2 + advanced * 1.3 + palacePressure;
+  const pawnBonus = type === "P" && crossedRiver ? 35 + advanced * 2 : 0;
+  const fileBonus = (type === "R" || type === "C") && col >= 3 && col <= 5 ? 12 : 0;
+  return center * 2 + advanced * 1.3 + palacePressure + pawnBonus + fileBonus;
 }
 
 function isCapture(state: GameState, move: CandidateMove): boolean {
@@ -68,10 +76,11 @@ function allMoves(state: GameState, side: Side): CandidateMove[] {
 
       for (const to of getValidMovesForState(state, { row, col })) {
         const captured = state.board[to.row][to.col];
+        const captureValue = pieceValue(captured?.type);
         moves.push({
           from: { row, col },
           to,
-          score: pieceValue(captured?.type) * 10 + positionWeight(to.row, to.col, side),
+          score: captureValue * 20 - (captureValue ? pieceValue(piece.type) : 0) + positionWeight(piece.type, to.row, to.col, side),
         });
       }
     }
@@ -92,7 +101,10 @@ function tacticalMoves(state: GameState, side: Side): CandidateMove[] {
         const move: CandidateMove = {
           from: { row, col },
           to,
-          score: pieceValue(state.board[to.row][to.col]?.type) * 10 + positionWeight(to.row, to.col, side),
+          score:
+            pieceValue(state.board[to.row][to.col]?.type) * 20 -
+            (state.board[to.row][to.col] ? pieceValue(piece.type) : 0) +
+            positionWeight(piece.type, to.row, to.col, side),
         };
         const next = makeMove(state, move.from, move.to);
         if (isCapture(state, move) || next.isCheck) {
@@ -107,15 +119,15 @@ function tacticalMoves(state: GameState, side: Side): CandidateMove[] {
 }
 
 function evaluate(state: GameState, aiSide: Side): number {
-  if (state.winner === aiSide) return CHECKMATE_SCORE + state.moveHistory.length;
-  if (state.winner) return -CHECKMATE_SCORE - state.moveHistory.length;
+  if (state.winner === aiSide) return CHECKMATE_SCORE - state.moveHistory.length;
+  if (state.winner) return -CHECKMATE_SCORE + state.moveHistory.length;
 
   let score = 0;
   for (let row = 0; row < 10; row++) {
     for (let col = 0; col < 9; col++) {
       const piece = state.board[row][col];
       if (!piece) continue;
-      const val = pieceValue(piece.type) + positionWeight(row, col, piece.side);
+      const val = pieceValue(piece.type) + positionWeight(piece.type, row, col, piece.side);
       score += piece.side === aiSide ? val : -val;
     }
   }
@@ -130,9 +142,9 @@ function isTimeUp(): boolean {
   return performance.now() >= searchDeadline;
 }
 
-function quiescence(state: GameState, alpha: number, beta: number, aiSide: Side): number {
+function quiescence(state: GameState, alpha: number, beta: number, aiSide: Side, depth = QUIESCENCE_DEPTH): number {
   if (state.winner) return evaluate(state, aiSide);
-  if (isTimeUp()) return evaluate(state, aiSide);
+  if (depth <= 0 || isTimeUp()) return evaluate(state, aiSide);
 
   const standPat = evaluate(state, aiSide);
   if (state.currentTurn === aiSide) {
@@ -142,7 +154,7 @@ function quiescence(state: GameState, alpha: number, beta: number, aiSide: Side)
     const moves = tacticalMoves(state, aiSide);
     for (let i = 0; i < moves.length; i++) {
       const next = makeMove(state, moves[i].from, moves[i].to);
-      const score = quiescence(next, alpha, beta, aiSide);
+      const score = quiescence(next, alpha, beta, aiSide, depth - 1);
       if (score > alpha) alpha = score;
       if (alpha >= beta) break;
       if (isTimeUp()) break;
@@ -156,7 +168,7 @@ function quiescence(state: GameState, alpha: number, beta: number, aiSide: Side)
   const moves = tacticalMoves(state, opponent(aiSide));
   for (let i = 0; i < moves.length; i++) {
     const next = makeMove(state, moves[i].from, moves[i].to);
-    const score = quiescence(next, alpha, beta, aiSide);
+    const score = quiescence(next, alpha, beta, aiSide, depth - 1);
     if (score < beta) beta = score;
     if (alpha >= beta) break;
     if (isTimeUp()) break;
@@ -204,12 +216,23 @@ function minimax(
   }
 }
 
+function sameMove(a: { from: Position; to: Position } | null, b: CandidateMove): boolean {
+  return Boolean(
+    a &&
+      a.from.row === b.from.row &&
+      a.from.col === b.from.col &&
+      a.to.row === b.to.row &&
+      a.to.col === b.to.col
+  );
+}
+
 function searchRoot(
   state: GameState,
   depth: number,
-  aiSide: Side
+  aiSide: Side,
+  preferredMove: { from: Position; to: Position } | null
 ): { move: { from: Position; to: Position } | null; completed: boolean } {
-  const moves = allMoves(state, aiSide);
+  const moves = allMoves(state, aiSide).sort((a, b) => Number(sameMove(preferredMove, b)) - Number(sameMove(preferredMove, a)));
   if (moves.length === 0) return { move: null, completed: true };
 
   let bestMove = moves[0];
@@ -235,13 +258,13 @@ function searchRoot(
 
 function searchBestMove(state: GameState, difficulty: Difficulty, aiSide: Side): { from: Position; to: Position } | null {
   const maxDepth = DIFFICULTY_DEPTH[difficulty];
-  searchDeadline = performance.now() + MAX_SEARCH_MS;
+  searchDeadline = performance.now() + SEARCH_TIME_MS[difficulty];
 
   let bestMove: { from: Position; to: Position } | null = null;
   for (let depth = 1; depth <= maxDepth; depth++) {
     if (isTimeUp()) break;
 
-    const result = searchRoot(state, depth, aiSide);
+    const result = searchRoot(state, depth, aiSide, bestMove);
     if (!result.move) return null;
 
     if (result.completed || bestMove === null) {
@@ -275,13 +298,13 @@ export async function getAIMoveWithDelay(
   await yieldToBrowser();
 
   const maxDepth = DIFFICULTY_DEPTH[difficulty];
-  searchDeadline = performance.now() + MAX_SEARCH_MS;
+  searchDeadline = performance.now() + SEARCH_TIME_MS[difficulty];
 
   let bestMove: { from: Position; to: Position } | null = null;
   for (let depth = 1; depth <= maxDepth; depth++) {
     if (isTimeUp()) break;
 
-    const result = searchRoot(state, depth, aiSide);
+    const result = searchRoot(state, depth, aiSide, bestMove);
     if (!result.move) return null;
 
     if (result.completed || bestMove === null) {
